@@ -1,0 +1,14 @@
+# The TUI Frameworks
+go get github.com/charmbracelet/bubbletea
+go get github.com/charmbracelet/lipgloss
+go get github.com/charmbracelet/bubbles
+
+# The Charting Library
+go get github.com/NimbleMarkets/ntcharts
+
+# The Packet Tracking Engine
+go get github.com/google/gopacket
+
+# The Speedtest API
+go get github.com/showwin/speedtest-go
+go get github.com/charmbracelet/x/ansi@v0.11.6
