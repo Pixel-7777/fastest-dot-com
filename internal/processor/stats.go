@@ -6,9 +6,10 @@ import (
 )
 
 type Session struct {
+	AppName       string // NEW: Store the application name
 	RemoteIP      string
-	TotalBytes    int64
-	PayloadBytes  int64
+	TotalBytes    int64 // This serves as Throughput
+	PayloadBytes  int64 // NEW: This serves as Goodput
 	InboundBytes  int64
 	OutboundBytes int64
 
@@ -30,8 +31,13 @@ var LocalIP string
 func Process(info tracker.PacketInfo) {
 	s, exists := Registry[info.RemoteIP]
 	if !exists {
-		s = &Session{RemoteIP: info.RemoteIP, LastWindowAt: time.Now()}
+		s = &Session{RemoteIP: info.RemoteIP, AppName: info.AppName, LastWindowAt: time.Now()}
 		Registry[info.RemoteIP] = s
+	}
+
+	// Update the AppName if it was previously unknown but we found it now
+	if s.AppName == "System/Unknown" && info.AppName != "System/Unknown" {
+		s.AppName = info.AppName
 	}
 
 	now := time.Now()
@@ -42,6 +48,7 @@ func Process(info tracker.PacketInfo) {
 		s.OutboundBytes += int64(info.Size)
 	}
 	s.TotalBytes += int64(info.Size)
+	s.PayloadBytes += int64(info.PayloadSize) // NEW: Tally the Goodput
 
 	s.WindowBytes += int64(info.Size)
 	duration := now.Sub(s.LastWindowAt)

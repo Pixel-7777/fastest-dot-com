@@ -2,12 +2,13 @@ package main
 
 import (
 	"fmt"
-	"fastest-dot-com/internal/capture"
-	"fastest-dot-com/internal/processor"
-	"fastest-dot-com/internal/tracker"
 	"os"
 	"sort"
 	"time"
+
+	"fastest-dot-com/internal/capture"
+	"fastest-dot-com/internal/processor"
+	"fastest-dot-com/internal/tracker"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -78,7 +79,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = pageMonitor
 				device, _ := capture.FindActiveDevice()
 				m.device = device
-				// Start the engine
 				go capture.StartEngine(device, m.packetPipe)
 				return m, listenForPackets(m.packetPipe)
 			}
@@ -124,54 +124,64 @@ func (m model) View() string {
 		return s
 	}
 
-	// MONITOR PAGE
 	s := headerStyle.Render(fmt.Sprintf("LIVE MONITOR [%s] - Local: %s - Press ESC for Menu", m.device, processor.LocalIP)) + "\n"
 
-	// FIXED: Table header now matches the width of the rows below
-	headerRow := fmt.Sprintf("%-18s | %-8s | %-8s | %-8s | %-10s | %-10s | %-5s",
-		"Remote IP", "In MB", "Out MB", "Mbps", "Latency", "Jitter", "Loss")
+	// WIDENED TABLE HEADER
+	headerRow := fmt.Sprintf("%-18s | %-16s | %-10s | %-9s | %-6s | %-6s | %-7s | %-8s | %-4s",
+		"Application", "Remote IP", "Throughput", "Goodput", "In MB", "Out MB", "Mbps", "Latency", "Loss")
 	s += tableHeader.Render(headerRow) + "\n"
 
 	keys := make([]string, 0, len(processor.Registry))
 	for k := range processor.Registry {
 		keys = append(keys, k)
 	}
-	// Sort by IP string to prevent the list from jumping around
 	sort.Strings(keys)
 
 	count := 0
 	for _, ip := range keys {
-		if count > 18 { // Increased limit for larger terminals
+		if count > 18 {
 			break
 		}
 		stats := processor.Registry[ip]
 
-		// Filter out dead connections to keep UI clean
 		if stats.TotalBytes == 0 {
 			continue
 		}
 
-		// Calculate values
 		inMB := float64(stats.InboundBytes) / 1024 / 1024
 		outMB := float64(stats.OutboundBytes) / 1024 / 1024
 		lat := stats.Latency.Round(time.Millisecond)
-		jit := stats.AverageJitter.Round(time.Microsecond)
 
-		// Color logic for Packet Loss
-		lossStr := fmt.Sprintf("%-5d", stats.PacketLoss)
+		lossStr := fmt.Sprintf("%-4d", stats.PacketLoss)
 		if stats.PacketLoss > 0 {
 			lossStr = lossStyle.Render(lossStr)
 		}
 
-		// Build the row string
-		row := fmt.Sprintf("%-18s | %-8.2f | %-8.2f | %-8.2f | %-10v | %-10v | %s\n",
-			ip, inMB, outMB, stats.CurrentRate, lat, jit, lossStr)
+		// Convert our raw byte counts for the UI
+		thruStr := formatBytes(uint64(stats.TotalBytes))
+		goodStr := formatBytes(uint64(stats.PayloadBytes))
+
+		row := fmt.Sprintf("%-18.18s | %-16.16s | %-10s | %-9s | %-6.2f | %-6.2f | %-7.2f | %-8v | %s\n",
+			stats.AppName, ip, thruStr, goodStr, inMB, outMB, stats.CurrentRate, lat, lossStr)
 
 		s += row
 		count++
 	}
 
 	return s
+}
+
+func formatBytes(b uint64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }
 
 func main() {

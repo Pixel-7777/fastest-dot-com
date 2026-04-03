@@ -2,33 +2,30 @@ package capture
 
 import (
 	"fmt"
-	"net"
+	"sync"
+	"time"
+
 	"fastest-dot-com/internal/processor"
 	"fastest-dot-com/internal/tracker"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
+	psnet "github.com/shirou/gopsutil/v3/net"
+	"github.com/shirou/gopsutil/v3/process"
+)
+
+var (
+	portToApp = make(map[uint32]string)
+	pidCache  = make(map[int32]string)
+	mapLock   sync.RWMutex
 )
 
 func StartEngine(device string, out chan tracker.PacketInfo) error {
-	// Find the local IP for direction logic
-	iface, err := net.InterfaceByName(device)
-	if err != nil {
-		return err
-	}
-	addrs, err := iface.Addrs()
-	if err != nil {
-		return err
-	}
-	for _, addr := range addrs {
-		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			if ipnet.IP.To4() != nil {
-				processor.LocalIP = ipnet.IP.String()
-				break
-			}
-		}
-	}
+	// Start our background app mapper!
+	go refreshProcessMap()
+
+	// (We deleted the net.InterfaceByName block here because it crashes on Windows)
 
 	handle, err := pcap.OpenLive(device, 1600, true, pcap.BlockForever)
 	if err != nil {
@@ -74,25 +71,87 @@ func parsePacket(packet gopacket.Packet) *tracker.PacketInfo {
 	protocol := "Other"
 	var port int
 	var seq uint32
+	var localPort uint32
+	var payloadSize int
+
+	// Extract Goodput payload
+	if appLayer := packet.ApplicationLayer(); appLayer != nil {
+		payloadSize = len(appLayer.Payload())
+	}
 
 	if tcpLayer := packet.Layer(layers.LayerTypeTCP); tcpLayer != nil {
 		tcp, _ := tcpLayer.(*layers.TCP)
 		protocol = "TCP"
 		port = int(tcp.DstPort)
 		seq = tcp.Seq
+		if isIncoming {
+			localPort = uint32(tcp.DstPort)
+		} else {
+			localPort = uint32(tcp.SrcPort)
+		}
 	} else if udpLayer := packet.Layer(layers.LayerTypeUDP); udpLayer != nil {
 		udp, _ := udpLayer.(*layers.UDP)
 		protocol = "UDP"
 		port = int(udp.DstPort)
+		if isIncoming {
+			localPort = uint32(udp.DstPort)
+		} else {
+			localPort = uint32(udp.SrcPort)
+		}
+	}
+
+	// Map the port to the App Name
+	mapLock.RLock()
+	appName := portToApp[localPort]
+	mapLock.RUnlock()
+	if appName == "" {
+		appName = "System/Unknown"
 	}
 
 	return &tracker.PacketInfo{
-		RemoteIP:  remoteIP,
-		Port:      port,
-		Protocol:  protocol,
-		Size:      len(packet.Data()),
-		SeqNum:    seq,
-		IsInbound: isIncoming,
+		RemoteIP:    remoteIP,
+		Port:        port,
+		Protocol:    protocol,
+		Size:        len(packet.Data()),
+		SeqNum:      seq,
+		IsInbound:   isIncoming,
+		AppName:     appName,
+		PayloadSize: payloadSize,
+	}
+}
+
+func refreshProcessMap() {
+	for {
+		conns, err := psnet.Connections("all")
+		if err != nil {
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		newPortMap := make(map[uint32]string)
+		for _, conn := range conns {
+			if conn.Pid == 0 {
+				continue
+			}
+
+			name, known := pidCache[conn.Pid]
+			if !known {
+				proc, err := process.NewProcess(conn.Pid)
+				if err == nil {
+					name, _ = proc.Name()
+					pidCache[conn.Pid] = name
+				} else {
+					name = "System/Unknown"
+				}
+			}
+			newPortMap[conn.Laddr.Port] = name
+		}
+
+		mapLock.Lock()
+		portToApp = newPortMap
+		mapLock.Unlock()
+
+		time.Sleep(2 * time.Second)
 	}
 }
 
@@ -101,13 +160,17 @@ func FindActiveDevice() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	for _, d := range devices {
-		if d.Name == "lo" || d.Name == "any" {
-			continue
-		}
-		if len(d.Addresses) > 0 {
-			return d.Name, nil
+
+	for _, device := range devices {
+		for _, address := range device.Addresses {
+			ip := address.IP
+
+			if ip.To4() != nil && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() {
+				// NEW: Set the Local IP right here where it's safe!
+				processor.LocalIP = ip.String()
+				return device.Name, nil
+			}
 		}
 	}
-	return "", fmt.Errorf("no active network device found")
+	return "", fmt.Errorf("could not find an active internet connection")
 }
