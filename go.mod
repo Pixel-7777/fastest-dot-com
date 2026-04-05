@@ -6,6 +6,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/google/gopacket v1.1.19
+	github.com/guptarohit/asciigraph v0.9.0
 	github.com/shirou/gopsutil/v3 v3.24.5
 	github.com/showwin/speedtest-go v1.7.10
 )

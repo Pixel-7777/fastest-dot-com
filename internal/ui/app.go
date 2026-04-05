@@ -38,7 +38,14 @@ type model struct {
 	width      int
 	height     int
 
-	// Speed Test Variables
+	//graph variables
+	thruGraph  *Graph
+	goodGraph  *Graph
+	speedGraph *Graph
+	lastTotal  int64
+	lastGood   int64
+
+	//speed Test Variables
 	stStatus string
 	stPing   time.Duration
 	stDL     float64
@@ -52,6 +59,11 @@ var (
 	activeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00")).Bold(true)
 	tableHeader = lipgloss.NewStyle().Background(lipgloss.Color("#3C3C3C")).Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
 	lossStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0000"))
+
+	//graph Colors
+	thruColor  = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF00FF")) //pink
+	goodColor  = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FFFF")) //cyan
+	speedColor = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFF00")) //yellow
 )
 
 func initialModel() model {
@@ -59,12 +71,15 @@ func initialModel() model {
 		state:      pageMenu,
 		choices:    []string{"Real-time Monitor", "Test Internet Speed", "Exit"},
 		packetPipe: make(chan tracker.PacketInfo),
+		thruGraph:  NewGraph("Throughput (Mbps)", 40, 8),
+		goodGraph:  NewGraph("Goodput (Mbps)", 40, 8),
+		speedGraph: NewGraph("Live Bandwidth Activity (Mbps)", 85, 12),
 	}
 }
 
 // bubble tea interface
 func (m model) Init() tea.Cmd {
-	return tea.Tick(time.Millisecond*800, func(t time.Time) tea.Msg {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
 		return tickMsg(t)
 	})
 }
@@ -102,7 +117,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.stPing = 0
 				m.stDL = 0
 				m.stUL = 0
-				return m, stInit()
+
+				var cmds []tea.Cmd
+				cmds = append(cmds, stInit())
+
+				//booting engine
+				if m.device == "" {
+					device, _ := capture.FindActiveDevice()
+					m.device = device
+					go capture.StartEngine(device, m.packetPipe)
+					cmds = append(cmds, listenForPackets(m.packetPipe))
+				}
+				return m, tea.Batch(cmds...)
 			}
 			if m.cursor == 2 {
 				return m, tea.Quit
@@ -144,7 +170,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, listenForPackets(m.packetPipe)
 
 	case tickMsg:
-		return m, tea.Tick(time.Millisecond*800, func(t time.Time) tea.Msg {
+		var currentTotal, currentGood int64
+		for _, stats := range processor.Registry {
+			currentTotal += stats.TotalBytes
+			currentGood += stats.PayloadBytes
+		}
+
+		if m.lastTotal != 0 {
+			thruMbps := float64(currentTotal-m.lastTotal) * 8 / 1000000
+			goodMbps := float64(currentGood-m.lastGood) * 8 / 1000000
+
+			m.thruGraph.AddPoint(thruMbps)
+			m.goodGraph.AddPoint(goodMbps)
+			m.speedGraph.AddPoint(thruMbps)
+		}
+		m.lastTotal = currentTotal
+		m.lastGood = currentGood
+
+		return m, tea.Tick(time.Second, func(t time.Time) tea.Msg {
 			return tickMsg(t)
 		})
 	}
@@ -170,6 +213,7 @@ func (m model) View() string {
 
 	if m.state == pageSpeedTest {
 		s := headerStyle.Render("─── ACTIVE INTERNET SPEED TEST ───") + "\n\n"
+		s += speedColor.Render(m.speedGraph.View()) + "\n\n"
 		s += m.stStatus + "\n\n"
 
 		if m.stPing > 0 {
@@ -190,6 +234,11 @@ func (m model) View() string {
 
 	//monitor view
 	s := headerStyle.Render(fmt.Sprintf("LIVE MONITOR [%s] - Local: %s - Press ESC for Menu", m.device, processor.LocalIP)) + "\n"
+	graphs := lipgloss.JoinHorizontal(lipgloss.Top,
+		lipgloss.NewStyle().MarginRight(4).Render(thruColor.Render(m.thruGraph.View())),
+		goodColor.Render(m.goodGraph.View()),
+	)
+	s += graphs + "\n\n"
 
 	headerRow := fmt.Sprintf("%-18s | %-16s | %-10s | %-9s | %-6s | %-6s | %-7s | %-8s | %-4s",
 		"Application", "Remote IP", "Throughput", "Goodput", "In MB", "Out MB", "Mbps", "Latency", "Loss")
