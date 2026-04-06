@@ -8,6 +8,7 @@ import (
 type Session struct {
 	AppName       string // NEW: Store the application name
 	RemoteIP      string
+	Protocol string
 	TotalBytes    int64 // This serves as Throughput
 	PayloadBytes  int64 // NEW: This serves as Goodput
 	InboundBytes  int64
@@ -27,8 +28,13 @@ type Session struct {
 
 var Registry = make(map[string]*Session)
 var LocalIP string
+var TargetApp string
 
 func Process(info tracker.PacketInfo) {
+	if TargetApp != "" && info.AppName != TargetApp {
+		return
+	}
+
 	s, exists := Registry[info.RemoteIP]
 	if !exists {
 		s = &Session{RemoteIP: info.RemoteIP, AppName: info.AppName, LastWindowAt: time.Now()}
@@ -49,6 +55,7 @@ func Process(info tracker.PacketInfo) {
 	}
 	s.TotalBytes += int64(info.Size)
 	s.PayloadBytes += int64(info.PayloadSize) // NEW: Tally the Goodput
+	s.Protocol = info.Protocol
 
 	s.WindowBytes += int64(info.Size)
 	duration := now.Sub(s.LastWindowAt)

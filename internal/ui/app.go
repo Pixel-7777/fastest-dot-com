@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"time"
 
@@ -20,9 +21,11 @@ const (
 	pageMenu sessionState = iota
 	pageMonitor
 	pageSpeedTest
+	pageAppSelect
 )
 
 type tickMsg time.Time
+type clearStatusMsg struct{}
 type stStepMsg struct {
 	step   string
 	server *speedtest.Server
@@ -38,38 +41,44 @@ type model struct {
 	width      int
 	height     int
 
-	//graph variables
+	appCursor  int
+	appChoices []string
+
 	thruGraph  *Graph
 	goodGraph  *Graph
 	speedGraph *Graph
 	lastTotal  int64
 	lastGood   int64
 
-	//speed Test Variables
 	stStatus string
 	stPing   time.Duration
 	stDL     float64
 	stUL     float64
 	stDone   bool
+
+	isRecording     bool
+	recordFile      *os.File
+	recordFilename  string
+	recordStartTime time.Time
+	recordStatus    string
+	startTotals     map[string]int64
 }
 
-// styles
 var (
 	headerStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#7D56F4")).MarginBottom(1)
 	activeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00")).Bold(true)
 	tableHeader = lipgloss.NewStyle().Background(lipgloss.Color("#3C3C3C")).Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
 	lossStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0000"))
 
-	//graph Colors
-	thruColor  = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF00FF")) //pink
-	goodColor  = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FFFF")) //cyan
-	speedColor = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFF00")) //yellow
+	thruColor  = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF00FF"))
+	goodColor  = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FFFF"))
+	speedColor = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFF00"))
 )
 
 func initialModel() model {
 	return model{
 		state:      pageMenu,
-		choices:    []string{"Real-time Monitor", "Test Internet Speed", "Exit"},
+		choices:    []string{"Real-time Monitor", "Track Specific App", "Test Internet Speed", "Exit"},
 		packetPipe: make(chan tracker.PacketInfo),
 		thruGraph:  NewGraph("Throughput (Mbps)", 40, 8),
 		goodGraph:  NewGraph("Goodput (Mbps)", 40, 8),
@@ -77,7 +86,6 @@ func initialModel() model {
 	}
 }
 
-// bubble tea interface
 func (m model) Init() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
 		return tickMsg(t)
@@ -93,53 +101,106 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
+			if m.isRecording {
+				stopRecording(&m)
+			}
 			return m, tea.Quit
 		case "up", "k":
-			if m.cursor > 0 {
+			if m.state == pageMenu && m.cursor > 0 {
 				m.cursor--
+			} else if m.state == pageAppSelect && m.appCursor > 0 {
+				m.appCursor--
 			}
 		case "down", "j":
-			if m.cursor < len(m.choices)-1 {
+			if m.state == pageMenu && m.cursor < len(m.choices)-1 {
 				m.cursor++
+			} else if m.state == pageAppSelect && m.appCursor < len(m.appChoices)-1 {
+				m.appCursor++
+			}
+		case "r":
+			if m.state == pageMonitor {
+				if !m.isRecording {
+					startRecording(&m)
+					return m, nil
+				} else {
+					cmd := stopRecording(&m)
+					return m, cmd
+				}
 			}
 		case "enter":
-			if m.cursor == 0 {
-				m.state = pageMonitor
-				device, _ := capture.FindActiveDevice()
-				m.device = device
-				go capture.StartEngine(device, m.packetPipe)
-				return m, listenForPackets(m.packetPipe)
-			}
-			if m.cursor == 1 {
-				m.state = pageSpeedTest
-				m.stStatus = "Locating closest Speedtest server..."
-				m.stDone = false
-				m.stPing = 0
-				m.stDL = 0
-				m.stUL = 0
-
-				var cmds []tea.Cmd
-				cmds = append(cmds, stInit())
-
-				//booting engine
-				if m.device == "" {
-					device, _ := capture.FindActiveDevice()
-					m.device = device
-					go capture.StartEngine(device, m.packetPipe)
-					cmds = append(cmds, listenForPackets(m.packetPipe))
+			if m.state == pageMenu {
+				if m.cursor == 0 {
+					processor.TargetApp = ""
+					m.state = pageMonitor
+					var cmds []tea.Cmd
+					if m.device == "" {
+						device, _ := capture.FindActiveDevice()
+						m.device = device
+						go capture.StartEngine(device, m.packetPipe)
+						cmds = append(cmds, listenForPackets(m.packetPipe))
+					}
+					return m, tea.Batch(cmds...)
 				}
-				return m, tea.Batch(cmds...)
-			}
-			if m.cursor == 2 {
-				return m, tea.Quit
+				if m.cursor == 1 {
+					m.state = pageAppSelect
+					m.appCursor = 0
+					m.appChoices = capture.GetKnownApps()
+					var cmds []tea.Cmd
+					if m.device == "" {
+						device, _ := capture.FindActiveDevice()
+						m.device = device
+						go capture.StartEngine(device, m.packetPipe)
+						cmds = append(cmds, listenForPackets(m.packetPipe))
+					}
+					return m, tea.Batch(cmds...)
+				}
+				if m.cursor == 2 {
+					m.state = pageSpeedTest
+					m.stStatus = "Locating closest Speedtest server..."
+					m.stDone = false
+					m.stPing = 0
+					m.stDL = 0
+					m.stUL = 0
+
+					var cmds []tea.Cmd
+					cmds = append(cmds, stInit())
+
+					if m.device == "" {
+						device, _ := capture.FindActiveDevice()
+						m.device = device
+						go capture.StartEngine(device, m.packetPipe)
+						cmds = append(cmds, listenForPackets(m.packetPipe))
+					}
+					return m, tea.Batch(cmds...)
+				}
+				if m.cursor == 3 {
+					return m, tea.Quit
+				}
+			} else if m.state == pageAppSelect {
+				if len(m.appChoices) > 0 {
+					processor.TargetApp = m.appChoices[m.appCursor]
+					processor.Registry = make(map[string]*processor.Session)
+					m.state = pageMonitor
+				}
 			}
 		case "esc":
 			if m.state == pageMonitor {
+				var cmd tea.Cmd
+				if m.isRecording {
+					cmd = stopRecording(&m)
+				}
+				m.state = pageMenu
+				return m, cmd
+			} else if m.state == pageAppSelect {
 				m.state = pageMenu
 			} else if m.state == pageSpeedTest && m.stDone {
 				m.state = pageMenu
 			}
 		}
+
+	case clearStatusMsg:
+		m.recordStatus = ""
+		return m, nil
 
 	case stStepMsg:
 		if msg.err != nil {
@@ -148,7 +209,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.step == "ping" {
-			m.stStatus = fmt.Sprintf("Connected to: %s\nTesting Ping...", msg.server.Name)
+			m.stStatus = "Connected to: " + msg.server.Name + "\nTesting Ping..."
 			return m, stPing(msg.server)
 		} else if msg.step == "download" {
 			m.stPing = msg.server.Latency
@@ -170,6 +231,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, listenForPackets(m.packetPipe)
 
 	case tickMsg:
+		if m.state == pageAppSelect {
+			m.appChoices = capture.GetKnownApps()
+			sort.Strings(m.appChoices)
+			if m.appCursor >= len(m.appChoices) && len(m.appChoices) > 0 {
+				m.appCursor = len(m.appChoices) - 1
+			}
+		}
+
+		if m.isRecording && m.recordFile != nil {
+			for ip, stats := range processor.Registry {
+				if stats.CurrentRate > 0.01 { // Only log active streams
+					line := fmt.Sprintf("%s,%s,%s,%s,%.2f,%v,%d\n",
+						time.Now().Format("15:04:05"),
+						stats.AppName,
+						ip,
+						stats.Protocol,
+						stats.CurrentRate,
+						stats.Latency.Round(time.Millisecond),
+						stats.PacketLoss,
+					)
+					m.recordFile.WriteString(line)
+				}
+			}
+		}
+
 		var currentTotal, currentGood int64
 		for _, stats := range processor.Registry {
 			currentTotal += stats.TotalBytes
@@ -179,7 +265,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.lastTotal != 0 {
 			thruMbps := float64(currentTotal-m.lastTotal) * 8 / 1000000
 			goodMbps := float64(currentGood-m.lastGood) * 8 / 1000000
-
 			m.thruGraph.AddPoint(thruMbps)
 			m.goodGraph.AddPoint(goodMbps)
 			m.speedGraph.AddPoint(thruMbps)
@@ -195,151 +280,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) View() string {
-	if m.state == pageMenu {
-		s := headerStyle.Render("─── NETWORK MONITOR PRO ───") + "\n\n"
-		for i, choice := range m.choices {
-			cursor := " "
-			if m.cursor == i {
-				cursor = ">"
-				s += activeStyle.Render(fmt.Sprintf("%s %s", cursor, choice)) + "\n"
-			} else {
-				s += fmt.Sprintf("%s %s\n", cursor, choice)
-			}
-		}
-		s += "\n(Use arrows to navigate, Enter to select)"
-		return s
-	}
-
-	if m.state == pageSpeedTest {
-		s := headerStyle.Render("─── ACTIVE INTERNET SPEED TEST ───") + "\n\n"
-		s += speedColor.Render(m.speedGraph.View()) + "\n\n"
-		s += m.stStatus + "\n\n"
-
-		if m.stPing > 0 {
-			s += fmt.Sprintf("Ping:     %v\n", m.stPing)
-		}
-		if m.stDL > 0 {
-			s += fmt.Sprintf("Download: %.2f Mbps\n", m.stDL)
-		}
-		if m.stUL > 0 {
-			s += fmt.Sprintf("Upload:   %.2f Mbps\n", m.stUL)
-		}
-
-		if m.stDone {
-			s += "\n\nPress ESC to return to Menu"
-		}
-		return s
-	}
-
-	//monitor view
-	s := headerStyle.Render(fmt.Sprintf("LIVE MONITOR [%s] - Local: %s - Press ESC for Menu", m.device, processor.LocalIP)) + "\n"
-	graphs := lipgloss.JoinHorizontal(lipgloss.Top,
-		lipgloss.NewStyle().MarginRight(4).Render(thruColor.Render(m.thruGraph.View())),
-		goodColor.Render(m.goodGraph.View()),
-	)
-	s += graphs + "\n\n"
-
-	headerRow := fmt.Sprintf("%-18s | %-16s | %-10s | %-9s | %-6s | %-6s | %-7s | %-8s | %-4s",
-		"Application", "Remote IP", "Throughput", "Goodput", "In MB", "Out MB", "Mbps", "Latency", "Loss")
-	s += tableHeader.Render(headerRow) + "\n"
-
-	keys := make([]string, 0, len(processor.Registry))
-	for k := range processor.Registry {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	count := 0
-	for _, ip := range keys {
-		if count > 18 {
-			break
-		}
-		stats := processor.Registry[ip]
-
-		if stats.TotalBytes == 0 {
-			continue
-		}
-
-		inMB := float64(stats.InboundBytes) / 1024 / 1024
-		outMB := float64(stats.OutboundBytes) / 1024 / 1024
-		lat := stats.Latency.Round(time.Millisecond)
-
-		lossStr := fmt.Sprintf("%-4d", stats.PacketLoss)
-		if stats.PacketLoss > 0 {
-			lossStr = lossStyle.Render(lossStr)
-		}
-
-		thruStr := formatBytes(uint64(stats.TotalBytes))
-		goodStr := formatBytes(uint64(stats.PayloadBytes))
-
-		row := fmt.Sprintf("%-18.18s | %-16.16s | %-10s | %-9s | %-6.2f | %-6.2f | %-7.2f | %-8v | %s\n",
-			stats.AppName, ip, thruStr, goodStr, inMB, outMB, stats.CurrentRate, lat, lossStr)
-
-		s += row
-		count++
-	}
-
-	return s
-}
-
-// helpers & engine commands
-func listenForPackets(pipe chan tracker.PacketInfo) tea.Cmd {
-	return func() tea.Msg {
-		return <-pipe
-	}
-}
-
-func formatBytes(b uint64) string {
-	const unit = 1024
-	if b < unit {
-		return fmt.Sprintf("%d B", b)
-	}
-	div, exp := int64(unit), 0
-	for n := b / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
-}
-
-func stInit() tea.Cmd {
-	return func() tea.Msg {
-		client := speedtest.New()
-		serverList, err := client.FetchServers()
-		if err != nil {
-			return stStepMsg{err: err}
-		}
-		targets, err := serverList.FindServer([]int{})
-		if err != nil || len(targets) == 0 {
-			return stStepMsg{err: fmt.Errorf("no server found")}
-		}
-		return stStepMsg{step: "ping", server: targets[0]}
-	}
-}
-
-func stPing(s *speedtest.Server) tea.Cmd {
-	return func() tea.Msg {
-		s.PingTest(nil)
-		return stStepMsg{step: "download", server: s}
-	}
-}
-
-func stDownload(s *speedtest.Server) tea.Cmd {
-	return func() tea.Msg {
-		s.DownloadTest()
-		return stStepMsg{step: "upload", server: s}
-	}
-}
-
-func stUpload(s *speedtest.Server) tea.Cmd {
-	return func() tea.Msg {
-		s.UploadTest()
-		return stStepMsg{step: "done", server: s}
-	}
-}
-
-// Start function initializes the UI engine from the main function
 func Start() error {
 	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
 	_, err := p.Run()

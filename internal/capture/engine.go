@@ -174,3 +174,22 @@ func FindActiveDevice() (string, error) {
 	}
 	return "", fmt.Errorf("could not find an active internet connection")
 }
+
+func GetKnownApps() []string {
+	mapLock.RLock()
+	defer mapLock.RUnlock()
+
+	// Use a map to get unique app names
+	appSet := make(map[string]struct{})
+	for _, app := range portToApp {
+		if app != "System/Unknown" && app != "" {
+			appSet[app] = struct{}{}
+		}
+	}
+
+	var apps []string
+	for app := range appSet {
+		apps = append(apps, app)
+	}
+	return apps
+}
