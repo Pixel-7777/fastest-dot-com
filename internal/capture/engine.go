@@ -2,6 +2,7 @@ package capture
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,18 +22,36 @@ var (
 	mapLock   sync.RWMutex
 )
 
+
+
 func StartEngine(device string, out chan tracker.PacketInfo) error {
-	// Start our background app mapper!
 	go refreshProcessMap()
 
-	// (We deleted the net.InterfaceByName block here because it crashes on Windows)
+	// 1. Create an Inactive Handle so we can modify the raw driver settings
+	inactive, err := pcap.NewInactiveHandle(device)
+	if err != nil {
+		return err
+	}
+	defer inactive.CleanUp()
 
-	handle, err := pcap.OpenLive(device, 1600, true, pcap.BlockForever)
+	inactive.SetSnapLen(131072)
+	// 2. TURN OFF PROMISCUOUS MODE (Crucial for Wi-Fi adapter stability)
+	inactive.SetPromisc(false)
+	inactive.SetTimeout(pcap.BlockForever)
+	// 3. SET A MASSIVE KERNEL BUFFER (32MB instead of the tiny default)
+	inactive.SetBufferSize(32 * 1024 * 1024)
+
+	// 4. Activate the custom handle
+	handle, err := inactive.Activate()
 	if err != nil {
 		return err
 	}
 
 	source := gopacket.NewPacketSource(handle, handle.LinkType())
+
+	// 5. High-Performance Decoding (Saves massive CPU cycles)
+	source.DecodeOptions.Lazy = true
+	source.DecodeOptions.NoCopy = true
 
 	go func() {
 		defer handle.Close()
@@ -48,14 +67,22 @@ func StartEngine(device string, out chan tracker.PacketInfo) error {
 }
 
 func parsePacket(packet gopacket.Packet) *tracker.PacketInfo {
-	ipLayer := packet.Layer(layers.LayerTypeIPv4)
-	if ipLayer == nil {
+	var srcIP, dstIP string
+
+	// Check for IPv4 first
+	if ipv4Layer := packet.Layer(layers.LayerTypeIPv4); ipv4Layer != nil {
+		ipv4, _ := ipv4Layer.(*layers.IPv4)
+		srcIP = ipv4.SrcIP.String()
+		dstIP = ipv4.DstIP.String()
+	} else if ipv6Layer := packet.Layer(layers.LayerTypeIPv6); ipv6Layer != nil {
+		// If not IPv4, check for IPv6
+		ipv6, _ := ipv6Layer.(*layers.IPv6)
+		srcIP = ipv6.SrcIP.String()
+		dstIP = ipv6.DstIP.String()
+	} else {
+		// Not IP traffic (e.g. ARP packets), throw it away
 		return nil
 	}
-	ip, _ := ipLayer.(*layers.IPv4)
-
-	srcIP := ip.SrcIP.String()
-	dstIP := ip.DstIP.String()
 
 	var isIncoming bool
 	var remoteIP string
@@ -100,7 +127,6 @@ func parsePacket(packet gopacket.Packet) *tracker.PacketInfo {
 		}
 	}
 
-	// Map the port to the App Name
 	mapLock.RLock()
 	appName := portToApp[localPort]
 	mapLock.RUnlock()
@@ -112,7 +138,7 @@ func parsePacket(packet gopacket.Packet) *tracker.PacketInfo {
 		RemoteIP:    remoteIP,
 		Port:        port,
 		Protocol:    protocol,
-		Size:        len(packet.Data()),
+		Size:        packet.Metadata().Length,
 		SeqNum:      seq,
 		IsInbound:   isIncoming,
 		AppName:     appName,
@@ -124,7 +150,7 @@ func refreshProcessMap() {
 	for {
 		conns, err := psnet.Connections("all")
 		if err != nil {
-			time.Sleep(2 * time.Second)
+			time.Sleep(1 * time.Second)
 			continue
 		}
 
@@ -166,9 +192,11 @@ func FindActiveDevice() (string, error) {
 			ip := address.IP
 
 			if ip.To4() != nil && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() {
-				// NEW: Set the Local IP right here where it's safe!
-				processor.LocalIP = ip.String()
-				return device.Name, nil
+				// Specifically target your local Wi-Fi router's subnet
+				if strings.HasPrefix(ip.String(), "192.168.") {
+					processor.LocalIP = ip.String()
+					return device.Name, nil
+				}
 			}
 		}
 	}
@@ -179,7 +207,6 @@ func GetKnownApps() []string {
 	mapLock.RLock()
 	defer mapLock.RUnlock()
 
-	// Use a map to get unique app names
 	appSet := make(map[string]struct{})
 	for _, app := range portToApp {
 		if app != "System/Unknown" && app != "" {

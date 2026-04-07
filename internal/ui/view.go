@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"fastest-dot-com/internal/processor"
+
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -79,6 +80,8 @@ func (m model) renderSpeedTest() string {
 }
 
 func (m model) renderMonitor() string {
+	processor.RegistryLock.RLock()
+	defer processor.RegistryLock.RUnlock()
 	targetInfo := ""
 	if processor.TargetApp != "" {
 		targetInfo = fmt.Sprintf(" [Tracking: %s]", processor.TargetApp)
@@ -170,21 +173,26 @@ func (m model) renderMonitor() string {
 		"Application", "Remote IP", "Proto", "Throughput", "Goodput", "In MB", "Out MB", "Mbps", "Latency", "Loss")
 	s += tableHeader.Render(headerRow) + "\n"
 
-	keys := make([]string, 0, len(processor.Registry))
-	for k := range processor.Registry {
-		keys = append(keys, k)
+	type sessionItem struct {
+		ip    string
+		stats *processor.Session
 	}
-	sort.Strings(keys)
+	var items []sessionItem
+	for k, v := range processor.Registry {
+		items = append(items, sessionItem{ip: k, stats: v})
+	}
+	// Sort by Total Throughput (highest to lowest)
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].stats.TotalBytes > items[j].stats.TotalBytes
+	})
 
 	count := 0
-	for _, ip := range keys {
+	for _, item := range items {
 		if count > 18 {
 			break
 		}
-		stats := processor.Registry[ip]
-		if stats.TotalBytes == 0 {
-			continue
-		}
+		ip := item.ip
+		stats := item.stats
 
 		inMB := float64(stats.InboundBytes) / 1024 / 1024
 		outMB := float64(stats.OutboundBytes) / 1024 / 1024

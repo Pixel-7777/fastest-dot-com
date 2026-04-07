@@ -77,9 +77,10 @@ var (
 
 func initialModel() model {
 	return model{
-		state:      pageMenu,
-		choices:    []string{"Real-time Monitor", "Track Specific App", "Test Internet Speed", "Exit"},
-		packetPipe: make(chan tracker.PacketInfo),
+		state:   pageMenu,
+		choices: []string{"Real-time Monitor", "Track Specific App", "Test Internet Speed", "Exit"},
+		// 1. Create a massive bucket (1 Million packet buffer)
+		packetPipe: make(chan tracker.PacketInfo, 10000),
 		thruGraph:  NewGraph("Throughput (Mbps)", 40, 8),
 		goodGraph:  NewGraph("Goodput (Mbps)", 40, 8),
 		speedGraph: NewGraph("Live Bandwidth Activity (Mbps)", 85, 12),
@@ -87,7 +88,7 @@ func initialModel() model {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
+	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
 		return tickMsg(t)
 	})
 }
@@ -137,7 +138,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						device, _ := capture.FindActiveDevice()
 						m.device = device
 						go capture.StartEngine(device, m.packetPipe)
-						cmds = append(cmds, listenForPackets(m.packetPipe))
+						// 2. Start the dedicated background worker
+						go func() {
+							for pkt := range m.packetPipe {
+								processor.Process(pkt)
+							}
+						}()
 					}
 					return m, tea.Batch(cmds...)
 				}
@@ -150,7 +156,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						device, _ := capture.FindActiveDevice()
 						m.device = device
 						go capture.StartEngine(device, m.packetPipe)
-						cmds = append(cmds, listenForPackets(m.packetPipe))
+						go func() {
+							for pkt := range m.packetPipe {
+								processor.Process(pkt)
+							}
+						}()
 					}
 					return m, tea.Batch(cmds...)
 				}
@@ -169,7 +179,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						device, _ := capture.FindActiveDevice()
 						m.device = device
 						go capture.StartEngine(device, m.packetPipe)
-						cmds = append(cmds, listenForPackets(m.packetPipe))
+						go func() {
+							for pkt := range m.packetPipe {
+								processor.Process(pkt)
+							}
+						}()
 					}
 					return m, tea.Batch(cmds...)
 				}
@@ -179,7 +193,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if m.state == pageAppSelect {
 				if len(m.appChoices) > 0 {
 					processor.TargetApp = m.appChoices[m.appCursor]
+					// Make sure to lock if you are resetting the registry!
+					processor.RegistryLock.Lock()
 					processor.Registry = make(map[string]*processor.Session)
+					processor.RegistryLock.Unlock()
 					m.state = pageMonitor
 				}
 			}
@@ -226,10 +243,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-	case tracker.PacketInfo:
-		processor.Process(msg)
-		return m, listenForPackets(m.packetPipe)
-
 	case tickMsg:
 		if m.state == pageAppSelect {
 			m.appChoices = capture.GetKnownApps()
@@ -238,6 +251,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.appCursor = len(m.appChoices) - 1
 			}
 		}
+
+		// 3. Lock the data so the UI doesn't crash the background worker
+		processor.RegistryLock.RLock()
 
 		if m.isRecording && m.recordFile != nil {
 			for ip, stats := range processor.Registry {
@@ -262,17 +278,35 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			currentGood += stats.PayloadBytes
 		}
 
+		// Unlock immediately after we finish reading
+		processor.RegistryLock.RUnlock()
+
 		if m.lastTotal != 0 {
-			thruMbps := float64(currentTotal-m.lastTotal) * 8 / 1000000
-			goodMbps := float64(currentGood-m.lastGood) * 8 / 1000000
+			diffTotal := currentTotal - m.lastTotal
+			diffGood := currentGood - m.lastGood
+
+			// THE FIX: If the Garbage Collector just deleted a session,
+			// the diff will be negative. Clamp it to 0 so the graph doesn't break.
+			if diffTotal < 0 {
+				diffTotal = 0
+			}
+			if diffGood < 0 {
+				diffGood = 0
+			}
+
+			// Multiply by 2 to convert the 500ms diff into a full 1-second rate
+			thruMbps := (float64(diffTotal) * 8 / 1000000) * 2
+			goodMbps := (float64(diffGood) * 8 / 1000000) * 2
+
 			m.thruGraph.AddPoint(thruMbps)
 			m.goodGraph.AddPoint(goodMbps)
 			m.speedGraph.AddPoint(thruMbps)
 		}
+
 		m.lastTotal = currentTotal
 		m.lastGood = currentGood
 
-		return m, tea.Tick(time.Second, func(t time.Time) tea.Msg {
+		return m, tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
 			return tickMsg(t)
 		})
 	}
