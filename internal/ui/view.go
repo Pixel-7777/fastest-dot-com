@@ -16,6 +16,8 @@ func (m model) View() string {
 		return m.renderMenu()
 	case pageAppSelect:
 		return m.renderAppSelect()
+	case pageDeviceSelect:
+		return m.renderDeviceSelect()
 	case pageSpeedTest:
 		return m.renderSpeedTest()
 	case pageMonitor:
@@ -94,7 +96,7 @@ func (m model) renderMonitor() string {
 		recIndicator = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00")).Render(" [" + m.recordStatus + "]")
 	}
 
-	s := headerStyle.Render(fmt.Sprintf("LIVE MONITOR [%s] - Local: %s%s", m.device, processor.LocalIP, targetInfo)) +
+	s := headerStyle.Render(fmt.Sprintf("LIVE MONITOR [%s] - Local: %s%s", m.deviceDesc, processor.LocalIP, targetInfo)) +
 		recIndicator + "\n(Press ESC for Menu, 'r' to Record)\n"
 
 	graphs := lipgloss.JoinHorizontal(lipgloss.Top,
@@ -212,5 +214,36 @@ func (m model) renderMonitor() string {
 		count++
 	}
 
+	return s
+}
+
+func (m model) renderDeviceSelect() string {
+	s := headerStyle.Render("─── SELECT NETWORK INTERFACE ───") + "\n\n"
+
+	if len(m.devChoices) == 0 {
+		s += "Scanning interfaces...\n"
+	} else {
+		for i, dev := range m.devChoices {
+			cursor := " "
+			if m.devCursor == i {
+				cursor = ">"
+			}
+
+			ipStr := "No IPv4"
+			if len(dev.IPs) > 0 {
+				ipStr = dev.IPs[0]
+			}
+
+			// e.g., "> Intel(R) Wi-Fi 6 AX200 160MHz [192.168.1.5]"
+			line := fmt.Sprintf("%s %s [%s]", cursor, dev.Description, ipStr)
+
+			if m.devCursor == i {
+				s += activeStyle.Render(line) + "\n"
+			} else {
+				s += line + "\n"
+			}
+		}
+	}
+	s += "\n(Use arrows to navigate, Enter to select, 'r' to refresh, ESC to return)"
 	return s
 }

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"sort"
 	"time"
@@ -22,6 +23,7 @@ const (
 	pageMonitor
 	pageSpeedTest
 	pageAppSelect
+	pageDeviceSelect
 )
 
 type tickMsg time.Time
@@ -37,12 +39,16 @@ type model struct {
 	cursor     int
 	choices    []string
 	device     string
+	deviceDesc string
 	packetPipe chan tracker.PacketInfo
 	width      int
 	height     int
 
 	appCursor  int
 	appChoices []string
+
+	devCursor  int
+	devChoices []capture.NetworkDevice
 
 	thruGraph  *Graph
 	goodGraph  *Graph
@@ -78,7 +84,7 @@ var (
 func initialModel() model {
 	return model{
 		state:   pageMenu,
-		choices: []string{"Real-time Monitor", "Track Specific App", "Test Internet Speed", "Exit"},
+		choices: []string{"Real-time Monitor", "Track Specific App", "Select Network Device", "Test Internet Speed", "Exit"},
 		// 1. Create a massive bucket (1 Million packet buffer)
 		packetPipe: make(chan tracker.PacketInfo, 10000),
 		thruGraph:  NewGraph("Throughput (Mbps)", 40, 8),
@@ -91,6 +97,15 @@ func (m model) Init() tea.Cmd {
 	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
 		return tickMsg(t)
 	})
+}
+
+func startCaptureIfOff(m *model) {
+	if m.device == "" {
+		devName, devDesc, _ := capture.FindActiveDevice()
+		m.device = devName
+		m.deviceDesc = devDesc
+		go capture.StartEngine(m.device, m.packetPipe)
+	}
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -111,12 +126,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor--
 			} else if m.state == pageAppSelect && m.appCursor > 0 {
 				m.appCursor--
+			} else if m.state == pageDeviceSelect && m.devCursor > 0 { // NEW
+				m.devCursor--
 			}
 		case "down", "j":
 			if m.state == pageMenu && m.cursor < len(m.choices)-1 {
 				m.cursor++
 			} else if m.state == pageAppSelect && m.appCursor < len(m.appChoices)-1 {
 				m.appCursor++
+			} else if m.state == pageDeviceSelect && m.devCursor < len(m.devChoices)-1 { // NEW
+				m.devCursor++
 			}
 		case "r":
 			if m.state == pageMonitor {
@@ -127,44 +146,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmd := stopRecording(&m)
 					return m, cmd
 				}
+			} else if m.state == pageDeviceSelect { // NEW: Refresh device list
+				m.devChoices, _ = capture.GetAllDevices()
 			}
 		case "enter":
 			if m.state == pageMenu {
-				if m.cursor == 0 {
+				if m.cursor == 0 { // Real-time Monitor
 					processor.TargetApp = ""
 					m.state = pageMonitor
-					var cmds []tea.Cmd
-					if m.device == "" {
-						device, _ := capture.FindActiveDevice()
-						m.device = device
-						go capture.StartEngine(device, m.packetPipe)
-						// 2. Start the dedicated background worker
-						go func() {
-							for pkt := range m.packetPipe {
-								processor.Process(pkt)
-							}
-						}()
-					}
-					return m, tea.Batch(cmds...)
+					startCaptureIfOff(&m)
+					return m, nil
 				}
-				if m.cursor == 1 {
+				if m.cursor == 1 { // Track Specific App
 					m.state = pageAppSelect
 					m.appCursor = 0
 					m.appChoices = capture.GetKnownApps()
-					var cmds []tea.Cmd
-					if m.device == "" {
-						device, _ := capture.FindActiveDevice()
-						m.device = device
-						go capture.StartEngine(device, m.packetPipe)
-						go func() {
-							for pkt := range m.packetPipe {
-								processor.Process(pkt)
-							}
-						}()
-					}
-					return m, tea.Batch(cmds...)
+					startCaptureIfOff(&m)
+					return m, nil
 				}
-				if m.cursor == 2 {
+				if m.cursor == 2 { // NEW: Select Network Interface
+					m.state = pageDeviceSelect
+					m.devCursor = 0
+					m.devChoices, _ = capture.GetAllDevices()
+					return m, nil
+				}
+				if m.cursor == 3 { // Test Internet Speed (Shifted to 3)
 					m.state = pageSpeedTest
 					m.stStatus = "Locating closest Speedtest server..."
 					m.stDone = false
@@ -174,30 +180,41 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 					var cmds []tea.Cmd
 					cmds = append(cmds, stInit())
-
-					if m.device == "" {
-						device, _ := capture.FindActiveDevice()
-						m.device = device
-						go capture.StartEngine(device, m.packetPipe)
-						go func() {
-							for pkt := range m.packetPipe {
-								processor.Process(pkt)
-							}
-						}()
-					}
+					startCaptureIfOff(&m)
 					return m, tea.Batch(cmds...)
 				}
-				if m.cursor == 3 {
+				if m.cursor == 4 { // Exit (Shifted to 4)
 					return m, tea.Quit
 				}
 			} else if m.state == pageAppSelect {
 				if len(m.appChoices) > 0 {
 					processor.TargetApp = m.appChoices[m.appCursor]
-					// Make sure to lock if you are resetting the registry!
 					processor.RegistryLock.Lock()
 					processor.Registry = make(map[string]*processor.Session)
 					processor.RegistryLock.Unlock()
 					m.state = pageMonitor
+				}
+			} else if m.state == pageDeviceSelect { // NEW: Handle device selection
+				if len(m.devChoices) > 0 {
+					selected := m.devChoices[m.devCursor]
+					m.device = selected.Name
+					m.deviceDesc = selected.Description
+
+					// Update IP context
+					if len(selected.IPs) > 0 {
+						processor.LocalIP = selected.IPs[0]
+					}
+
+					// Safely restart the engine on the new device
+					capture.StopEngine()
+					go capture.StartEngine(m.device, m.packetPipe)
+
+					// Wipe old stats
+					processor.RegistryLock.Lock()
+					processor.Registry = make(map[string]*processor.Session)
+					processor.RegistryLock.Unlock()
+
+					m.state = pageMenu
 				}
 			}
 		case "esc":
@@ -208,7 +225,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.state = pageMenu
 				return m, cmd
-			} else if m.state == pageAppSelect {
+			} else if m.state == pageAppSelect || m.state == pageDeviceSelect { // UPDATED
 				m.state = pageMenu
 			} else if m.state == pageSpeedTest && m.stDone {
 				m.state = pageMenu
@@ -324,7 +341,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func Start() error {
-	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
+	f, _ := tea.LogToFile("debug.log", "network-monitor")
+	defer f.Close()
+	log.SetOutput(f)
+
+	m := initialModel()
+
+	go func() {
+		for pkt := range m.packetPipe {
+			processor.Process(pkt)
+		}
+	}()
+
+	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err := p.Run()
 	return err
 }

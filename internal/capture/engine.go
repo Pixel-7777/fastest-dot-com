@@ -16,10 +16,18 @@ import (
 )
 
 var (
-	portToApp = make(map[uint32]string)
-	pidCache  = make(map[int32]string)
-	mapLock   sync.RWMutex
+	portToApp    = make(map[uint32]string)
+	pidCache     = make(map[int32]string)
+	mapLock      sync.RWMutex
+	activeHandle *pcap.Handle
+	engineLock   sync.Mutex
 )
+
+type NetworkDevice struct {
+	Name        string
+	Description string
+	IPs         []string
+}
 
 func StartEngine(device string, out chan tracker.PacketInfo) error {
 	go refreshProcessMap()
@@ -44,6 +52,13 @@ func StartEngine(device string, out chan tracker.PacketInfo) error {
 		return err
 	}
 
+	engineLock.Lock()
+	if activeHandle != nil {
+		activeHandle.Close()
+	}
+	activeHandle = handle
+	engineLock.Unlock()
+
 	source := gopacket.NewPacketSource(handle, handle.LinkType())
 
 	// 5. High-Performance Decoding (Saves massive CPU cycles)
@@ -61,6 +76,15 @@ func StartEngine(device string, out chan tracker.PacketInfo) error {
 	}()
 
 	return nil
+}
+
+func StopEngine() {
+	engineLock.Lock()
+	defer engineLock.Unlock()
+	if activeHandle != nil {
+		activeHandle.Close()
+		activeHandle = nil
+	}
 }
 
 func parsePacket(packet gopacket.Packet) *tracker.PacketInfo {
@@ -178,24 +202,56 @@ func refreshProcessMap() {
 	}
 }
 
-func FindActiveDevice() (string, error) {
+func FindActiveDevice() (string, string, error) {
 	devices, err := pcap.FindAllDevs()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	for _, device := range devices {
 		for _, address := range device.Addresses {
 			ip := address.IP
-
-			// Grab the first valid IPv4 address that isn't localhost
 			if ip.To4() != nil && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() {
 				processor.LocalIP = ip.String()
-				return device.Name, nil
+
+				desc := device.Description
+				if desc == "" {
+					desc = device.Name // Fallback if description is empty
+				}
+				return device.Name, desc, nil
 			}
 		}
 	}
-	return "", fmt.Errorf("could not find an active internet connection")
+	return "", "", fmt.Errorf("could not find an active internet connection")
+}
+
+func GetAllDevices() ([]NetworkDevice, error) {
+	var devs []NetworkDevice
+	devices, err := pcap.FindAllDevs()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, d := range devices {
+		var ips []string
+		for _, addr := range d.Addresses {
+			if addr.IP.To4() != nil { // Focus on IPv4 for UI simplicity
+				ips = append(ips, addr.IP.String())
+			}
+		}
+
+		desc := d.Description
+		if desc == "" {
+			desc = "Unknown Device" // Fallback
+		}
+
+		devs = append(devs, NetworkDevice{
+			Name:        d.Name,
+			Description: desc,
+			IPs:         ips,
+		})
+	}
+	return devs, nil
 }
 
 func GetKnownApps() []string {
