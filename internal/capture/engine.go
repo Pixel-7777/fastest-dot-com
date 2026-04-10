@@ -2,7 +2,6 @@ package capture
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -21,8 +20,6 @@ var (
 	pidCache  = make(map[int32]string)
 	mapLock   sync.RWMutex
 )
-
-
 
 func StartEngine(device string, out chan tracker.PacketInfo) error {
 	go refreshProcessMap()
@@ -191,12 +188,10 @@ func FindActiveDevice() (string, error) {
 		for _, address := range device.Addresses {
 			ip := address.IP
 
+			// Grab the first valid IPv4 address that isn't localhost
 			if ip.To4() != nil && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() {
-				// Specifically target your local Wi-Fi router's subnet
-				if strings.HasPrefix(ip.String(), "192.168.") {
-					processor.LocalIP = ip.String()
-					return device.Name, nil
-				}
+				processor.LocalIP = ip.String()
+				return device.Name, nil
 			}
 		}
 	}

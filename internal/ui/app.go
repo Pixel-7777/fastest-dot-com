@@ -221,28 +221,37 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case stStepMsg:
 		if msg.err != nil {
-			m.stStatus = "Error: " + msg.err.Error()
-			m.stDone = true
-			return m, nil
-		}
-		if msg.step == "ping" {
-			m.stStatus = "Connected to: " + msg.server.Name + "\nTesting Ping..."
-			return m, stPing(msg.server)
-		} else if msg.step == "download" {
-			m.stPing = msg.server.Latency
-			m.stStatus = "Testing Download Speed..."
-			return m, stDownload(msg.server)
-		} else if msg.step == "upload" {
-			m.stDL = msg.server.DLSpeed.Mbps()
-			m.stStatus = "Testing Upload Speed..."
-			return m, stUpload(msg.server)
-		} else if msg.step == "done" {
-			m.stUL = msg.server.ULSpeed.Mbps()
-			m.stStatus = "🚀 Speed Test Complete!"
+			// Append the error so the user sees where it failed
+			m.stStatus += "\nError: " + msg.err.Error()
 			m.stDone = true
 			return m, nil
 		}
 
+		switch msg.step {
+		case "ping":
+			// "Connected to" becomes the first permanent line
+			m.stStatus = fmt.Sprintf("Connected to: %s (%s)\nTesting Ping...",
+				msg.server.Name, msg.server.Country)
+			return m, stPing(msg.server)
+
+		case "download":
+			m.stPing = msg.server.Latency
+			// Use \n to keep the previous lines and add a new status line
+			m.stStatus += "\nTesting Download Speed..."
+			return m, stDownload(msg.server)
+
+		case "upload":
+			// Capture DL speed then move to Upload
+			m.stDL = msg.server.DLSpeed.Mbps()
+			m.stStatus += "\nTesting Upload Speed..."
+			return m, stUpload(msg.server)
+
+		case "done":
+			m.stUL = msg.server.ULSpeed.Mbps()
+			m.stStatus += "\nSpeed Test Complete!"
+			m.stDone = true
+			return m, nil
+		}
 	case tickMsg:
 		if m.state == pageAppSelect {
 			m.appChoices = capture.GetKnownApps()

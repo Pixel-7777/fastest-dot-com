@@ -7,25 +7,26 @@ import (
 )
 
 type Session struct {
-	AppName       string
-	RemoteIP      string
-	Protocol      string
-	TotalBytes    int64
-	PayloadBytes  int64
-	InboundBytes  int64
+	AppName string
+	RemoteIP string
+	Port int
+	Protocol string
+	TotalBytes int64
+	PayloadBytes int64
+	InboundBytes int64
 	OutboundBytes int64
 
-	LastPacketAt  time.Time
+	LastPacketAt time.Time
 	AverageJitter time.Duration
-	Latency       time.Duration
+	Latency time.Duration
 
-	WindowBytes  int64
+	WindowBytes int64
 	LastWindowAt time.Time
-	CurrentRate  float64
+	CurrentRate float64
 
-	LastInboundSeq  uint32
+	LastInboundSeq uint32
 	LastOutboundSeq uint32
-	PacketLoss      int
+	PacketLoss int
 }
 
 var Registry = make(map[string]*Session)
@@ -61,7 +62,7 @@ func Process(info tracker.PacketInfo) {
 
 	s, exists := Registry[info.RemoteIP]
 	if !exists {
-		s = &Session{RemoteIP: info.RemoteIP, AppName: info.AppName, LastWindowAt: time.Now()}
+		s = &Session{RemoteIP: info.RemoteIP, AppName: info.AppName, Port: info.Port, LastWindowAt: time.Now()}
 		Registry[info.RemoteIP] = s
 	}
 

@@ -169,8 +169,8 @@ func (m model) renderMonitor() string {
 	}
 
 	// Table
-	headerRow := fmt.Sprintf("%-18s | %-16s | %-5s | %-10s | %-9s | %-6s | %-6s | %-7s | %-8s | %-4s",
-		"Application", "Remote IP", "Proto", "Throughput", "Goodput", "In MB", "Out MB", "Mbps", "Latency", "Loss")
+	headerRow := fmt.Sprintf("%-18s | %-16s | %-6s | %-5s | %-10s | %-9s | %-6s | %-6s | %-7s | %-8s | %-4s",
+		"Application", "Remote IP", "Port", "Protocol", "Throughput", "Goodput", "In MB", "Out MB", "Mbps", "Latency", "Loss")
 	s += tableHeader.Render(headerRow) + "\n"
 
 	type sessionItem struct {
@@ -206,8 +206,8 @@ func (m model) renderMonitor() string {
 		thruStr := formatBytes(uint64(stats.TotalBytes))
 		goodStr := formatBytes(uint64(stats.PayloadBytes))
 
-		row := fmt.Sprintf("%-18.18s | %-16.16s | %-5s | %-10s | %-9s | %-6.2f | %-6.2f | %-7.2f | %-8v | %s\n",
-			stats.AppName, ip, stats.Protocol, thruStr, goodStr, inMB, outMB, stats.CurrentRate, lat, lossStr)
+		row := fmt.Sprintf("%-18.18s | %-16.16s | %-6d | %-5s | %-10s | %-9s | %-6.2f | %-6.2f | %-7.2f | %-8v | %s\n",
+			stats.AppName, ip, stats.Port, stats.Protocol, thruStr, goodStr, inMB, outMB, stats.CurrentRate, lat, lossStr)
 		s += row
 		count++
 	}
