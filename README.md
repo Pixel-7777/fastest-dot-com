@@ -31,3 +31,11 @@ Requires Linux or [build libpcap on Windows](https://github.com/the-tcpdump-grou
 ```bash
     sudo go run main.go
 ```
+
+## One line installation for linux
+
+```
+
+curl -sL https://raw.githubusercontent.com/Pixel-7777/fastest-dot-com/main/install.sh | bash
+
+```
