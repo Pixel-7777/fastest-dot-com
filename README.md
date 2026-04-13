@@ -1,5 +1,6 @@
 # fastest[dot]com
 
+## If you want to run the code:
 ### 1. Installation
 Requires GO
 You must have [Go installed](https://go.dev/doc/install) on your system (version 1.20 or higher recommended).
@@ -14,28 +15,30 @@ Requires Linux or [build libpcap on Windows](https://github.com/the-tcpdump-grou
 1. Open terminal
 2. Clone the Repository
 ```bash
-   git clone https://github.com/Pixel-7777/fastest-dot-com.git
-   cd fastest-dot-com
+git clone https://github.com/Pixel-7777/fastest-dot-com.git
+cd fastest-dot-com
 ```
 3. Install Dependencies(Only for windows)
 ```bash
-    go mod tidy
+go mod tidy
 ```
 4. Run the Application
 
 (1) For Windows
 ```bash
-    go run main.go
+go run main.go
 ```
 (2) For Linux
 ```bash
-    sudo go run main.go
+sudo go run main.go
 ```
-
-## One line installation for linux
+---
+## If you want to directly install the file:
+### One line installation for linux
 
 ```
-
 curl -sL https://raw.githubusercontent.com/Pixel-7777/fastest-dot-com/main/install.sh | bash
-
 ```
+Or you can also install the .deb file from the latest releases
+### For Windows
+You can download the .exe file from the latest releases.
