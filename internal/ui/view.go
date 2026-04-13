@@ -27,7 +27,7 @@ func (m model) View() string {
 }
 
 func (m model) renderMenu() string {
-	s := headerStyle.Render("─── NETWORK MONITOR PRO ───") + "\n\n"
+	s := headerStyle.Render("─── FASTEST[DOT]COM ───") + "\n\n"
 	for i, choice := range m.choices {
 		cursor := " "
 		if m.cursor == i {
@@ -183,7 +183,6 @@ func (m model) renderMonitor() string {
 	for k, v := range processor.Registry {
 		items = append(items, sessionItem{ip: k, stats: v})
 	}
-	// Sort by Total Throughput (highest to lowest)
 	sort.Slice(items, func(i, j int) bool {
 		return items[i].stats.TotalBytes > items[j].stats.TotalBytes
 	})
@@ -235,7 +234,6 @@ func (m model) renderDeviceSelect() string {
 				ipStr = dev.IPs[0]
 			}
 
-			// e.g., "> Intel(R) Wi-Fi 6 AX200 160MHz [192.168.1.5]"
 			line := fmt.Sprintf("%s %s [%s]", cursor, dev.Description, ipStr)
 
 			if m.devCursor == i {

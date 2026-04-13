@@ -7,26 +7,26 @@ import (
 )
 
 type Session struct {
-	AppName string
-	RemoteIP string
-	Port int
-	Protocol string
-	TotalBytes int64
-	PayloadBytes int64
-	InboundBytes int64
+	AppName       string
+	RemoteIP      string
+	Port          int
+	Protocol      string
+	TotalBytes    int64
+	PayloadBytes  int64
+	InboundBytes  int64
 	OutboundBytes int64
 
-	LastPacketAt time.Time
+	LastPacketAt  time.Time
 	AverageJitter time.Duration
-	Latency time.Duration
+	Latency       time.Duration
 
-	WindowBytes int64
+	WindowBytes  int64
 	LastWindowAt time.Time
-	CurrentRate float64
+	CurrentRate  float64
 
-	LastInboundSeq uint32
+	LastInboundSeq  uint32
 	LastOutboundSeq uint32
-	PacketLoss int
+	PacketLoss      int
 }
 
 var Registry = make(map[string]*Session)
@@ -37,13 +37,11 @@ var TargetApp string
 func init() {
 	go func() {
 		for {
-			// Run the cleaner every 30 seconds
 			time.Sleep(30 * time.Second)
 
 			RegistryLock.Lock()
 			now := time.Now()
 			for ip, session := range Registry {
-				// If we haven't seen a packet from this IP in 60 seconds, delete it
 				if now.Sub(session.LastPacketAt) > 60*time.Second {
 					delete(Registry, ip)
 				}
@@ -103,17 +101,14 @@ func Process(info tracker.PacketInfo) {
 
 	if info.Protocol == "TCP" && info.SeqNum > 0 {
 		if info.IsInbound {
-			// Track incoming sequence numbers (Server -> You)
 			if s.LastInboundSeq > 0 && info.SeqNum <= s.LastInboundSeq {
 				if info.SeqNum == s.LastInboundSeq {
-					// An exact duplicate means the server thought a packet dropped and re-sent it
 					s.PacketLoss++
 				}
 			} else {
 				s.LastInboundSeq = info.SeqNum
 			}
 		} else {
-			// Track outgoing sequence numbers (You -> Server)
 			if s.LastOutboundSeq > 0 && info.SeqNum <= s.LastOutboundSeq {
 				if info.SeqNum == s.LastOutboundSeq {
 					s.PacketLoss++

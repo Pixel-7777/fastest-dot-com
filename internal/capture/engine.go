@@ -16,23 +16,22 @@ import (
 )
 
 var (
-	portToApp    = make(map[uint32]string)
-	pidCache     = make(map[int32]string)
-	mapLock      sync.RWMutex
+	portToApp = make(map[uint32]string)
+	pidCache = make(map[int32]string)
+	mapLock sync.RWMutex
 	activeHandle *pcap.Handle
-	engineLock   sync.Mutex
+	engineLock sync.Mutex
 )
 
 type NetworkDevice struct {
-	Name        string
+	Name string
 	Description string
-	IPs         []string
+	IPs []string
 }
 
 func StartEngine(device string, out chan tracker.PacketInfo) error {
 	go refreshProcessMap()
 
-	// 1. Create an Inactive Handle so we can modify the raw driver settings
 	inactive, err := pcap.NewInactiveHandle(device)
 	if err != nil {
 		return err
@@ -40,13 +39,11 @@ func StartEngine(device string, out chan tracker.PacketInfo) error {
 	defer inactive.CleanUp()
 
 	inactive.SetSnapLen(131072)
-	// 2. TURN OFF PROMISCUOUS MODE (Crucial for Wi-Fi adapter stability)
+
 	inactive.SetPromisc(false)
 	inactive.SetTimeout(pcap.BlockForever)
-	// 3. SET A MASSIVE KERNEL BUFFER (32MB instead of the tiny default)
 	inactive.SetBufferSize(32 * 1024 * 1024)
 
-	// 4. Activate the custom handle
 	handle, err := inactive.Activate()
 	if err != nil {
 		return err
@@ -61,7 +58,6 @@ func StartEngine(device string, out chan tracker.PacketInfo) error {
 
 	source := gopacket.NewPacketSource(handle, handle.LinkType())
 
-	// 5. High-Performance Decoding (Saves massive CPU cycles)
 	source.DecodeOptions.Lazy = true
 	source.DecodeOptions.NoCopy = true
 
@@ -90,7 +86,6 @@ func StopEngine() {
 func parsePacket(packet gopacket.Packet) *tracker.PacketInfo {
 	var srcIP, dstIP string
 
-	// Check for IPv4 first
 	if ipv4Layer := packet.Layer(layers.LayerTypeIPv4); ipv4Layer != nil {
 		ipv4, _ := ipv4Layer.(*layers.IPv4)
 		srcIP = ipv4.SrcIP.String()
@@ -101,7 +96,6 @@ func parsePacket(packet gopacket.Packet) *tracker.PacketInfo {
 		srcIP = ipv6.SrcIP.String()
 		dstIP = ipv6.DstIP.String()
 	} else {
-		// Not IP traffic (e.g. ARP packets), throw it away
 		return nil
 	}
 
@@ -122,7 +116,6 @@ func parsePacket(packet gopacket.Packet) *tracker.PacketInfo {
 	var localPort uint32
 	var payloadSize int
 
-	// Extract Goodput payload
 	if appLayer := packet.ApplicationLayer(); appLayer != nil {
 		payloadSize = len(appLayer.Payload())
 	}
@@ -156,13 +149,13 @@ func parsePacket(packet gopacket.Packet) *tracker.PacketInfo {
 	}
 
 	return &tracker.PacketInfo{
-		RemoteIP:    remoteIP,
-		Port:        port,
-		Protocol:    protocol,
-		Size:        packet.Metadata().Length,
-		SeqNum:      seq,
-		IsInbound:   isIncoming,
-		AppName:     appName,
+		RemoteIP: remoteIP,
+		Port: port,
+		Protocol: protocol,
+		Size: packet.Metadata().Length,
+		SeqNum: seq,
+		IsInbound: isIncoming,
+		AppName: appName,
 		PayloadSize: payloadSize,
 	}
 }
@@ -216,7 +209,7 @@ func FindActiveDevice() (string, string, error) {
 
 				desc := device.Description
 				if desc == "" {
-					desc = device.Name // Fallback if description is empty
+					desc = device.Name //fallback if description is empty
 				}
 				return device.Name, desc, nil
 			}
@@ -235,14 +228,14 @@ func GetAllDevices() ([]NetworkDevice, error) {
 	for _, d := range devices {
 		var ips []string
 		for _, addr := range d.Addresses {
-			if addr.IP.To4() != nil { // Focus on IPv4 for UI simplicity
+			if addr.IP.To4() != nil { //focus on IPv4 for UI simplicity
 				ips = append(ips, addr.IP.String())
 			}
 		}
 
 		desc := d.Description
 		if desc == "" {
-			desc = "Unknown Device" // Fallback
+			desc = "Unknown Device"
 		}
 
 		devs = append(devs, NetworkDevice{

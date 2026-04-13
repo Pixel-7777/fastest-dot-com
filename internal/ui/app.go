@@ -83,9 +83,8 @@ var (
 
 func initialModel() model {
 	return model{
-		state:   pageMenu,
-		choices: []string{"Real-time Monitor", "Track Specific App", "Select Network Device", "Test Internet Speed", "Exit"},
-		// 1. Create a massive bucket (1 Million packet buffer)
+		state:      pageMenu,
+		choices:    []string{"Real-time Monitor", "Track Specific App", "Select Network Device", "Test Internet Speed", "Exit"},
 		packetPipe: make(chan tracker.PacketInfo, 10000),
 		thruGraph:  NewGraph("Throughput (Mbps)", 40, 8),
 		goodGraph:  NewGraph("Goodput (Mbps)", 40, 8),
@@ -146,31 +145,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmd := stopRecording(&m)
 					return m, cmd
 				}
-			} else if m.state == pageDeviceSelect { // NEW: Refresh device list
+			} else if m.state == pageDeviceSelect {
 				m.devChoices, _ = capture.GetAllDevices()
 			}
 		case "enter":
 			if m.state == pageMenu {
-				if m.cursor == 0 { // Real-time Monitor
+				if m.cursor == 0 {
 					processor.TargetApp = ""
 					m.state = pageMonitor
 					startCaptureIfOff(&m)
 					return m, nil
 				}
-				if m.cursor == 1 { // Track Specific App
+				if m.cursor == 1 {
 					m.state = pageAppSelect
 					m.appCursor = 0
 					m.appChoices = capture.GetKnownApps()
 					startCaptureIfOff(&m)
 					return m, nil
 				}
-				if m.cursor == 2 { // NEW: Select Network Interface
+				if m.cursor == 2 {
 					m.state = pageDeviceSelect
 					m.devCursor = 0
 					m.devChoices, _ = capture.GetAllDevices()
 					return m, nil
 				}
-				if m.cursor == 3 { // Test Internet Speed (Shifted to 3)
+				if m.cursor == 3 {
 					m.state = pageSpeedTest
 					m.stStatus = "Locating closest Speedtest server..."
 					m.stDone = false
@@ -194,22 +193,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					processor.RegistryLock.Unlock()
 					m.state = pageMonitor
 				}
-			} else if m.state == pageDeviceSelect { // NEW: Handle device selection
+			} else if m.state == pageDeviceSelect {
 				if len(m.devChoices) > 0 {
 					selected := m.devChoices[m.devCursor]
 					m.device = selected.Name
 					m.deviceDesc = selected.Description
 
-					// Update IP context
 					if len(selected.IPs) > 0 {
 						processor.LocalIP = selected.IPs[0]
 					}
 
-					// Safely restart the engine on the new device
 					capture.StopEngine()
 					go capture.StartEngine(m.device, m.packetPipe)
 
-					// Wipe old stats
 					processor.RegistryLock.Lock()
 					processor.Registry = make(map[string]*processor.Session)
 					processor.RegistryLock.Unlock()
@@ -238,7 +234,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case stStepMsg:
 		if msg.err != nil {
-			// Append the error so the user sees where it failed
 			m.stStatus += "\nError: " + msg.err.Error()
 			m.stDone = true
 			return m, nil
@@ -246,19 +241,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.step {
 		case "ping":
-			// "Connected to" becomes the first permanent line
 			m.stStatus = fmt.Sprintf("Connected to: %s (%s)\nTesting Ping...",
 				msg.server.Name, msg.server.Country)
 			return m, stPing(msg.server)
 
 		case "download":
 			m.stPing = msg.server.Latency
-			// Use \n to keep the previous lines and add a new status line
 			m.stStatus += "\nTesting Download Speed..."
 			return m, stDownload(msg.server)
 
 		case "upload":
-			// Capture DL speed then move to Upload
 			m.stDL = msg.server.DLSpeed.Mbps()
 			m.stStatus += "\nTesting Upload Speed..."
 			return m, stUpload(msg.server)
@@ -278,7 +270,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// 3. Lock the data so the UI doesn't crash the background worker
 		processor.RegistryLock.RLock()
 
 		if m.isRecording && m.recordFile != nil {
@@ -304,15 +295,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			currentGood += stats.PayloadBytes
 		}
 
-		// Unlock immediately after we finish reading
 		processor.RegistryLock.RUnlock()
 
 		if m.lastTotal != 0 {
 			diffTotal := currentTotal - m.lastTotal
 			diffGood := currentGood - m.lastGood
 
-			// THE FIX: If the Garbage Collector just deleted a session,
-			// the diff will be negative. Clamp it to 0 so the graph doesn't break.
 			if diffTotal < 0 {
 				diffTotal = 0
 			}
@@ -320,7 +308,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				diffGood = 0
 			}
 
-			// Multiply by 2 to convert the 500ms diff into a full 1-second rate
 			thruMbps := (float64(diffTotal) * 8 / 1000000) * 2
 			goodMbps := (float64(diffGood) * 8 / 1000000) * 2
 
