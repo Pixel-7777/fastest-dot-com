@@ -171,8 +171,8 @@ func (m model) renderMonitor() string {
 	}
 
 	// Table
-	headerRow := fmt.Sprintf("%-18s | %-16s | %-6s | %-5s | %-10s | %-9s | %-6s | %-6s | %-7s | %-8s | %-4s",
-		"Application", "Remote IP", "Port", "Protocol", "Throughput", "Goodput", "In MB", "Out MB", "Mbps", "Latency", "Loss")
+	headerRow := fmt.Sprintf("%-18s | %-16s | %-6s | %-5s | %-10s | %-9s | %-7s | %-7s | %-7s | %-8s | %-8s | %-4s",
+		"Application", "Remote IP", "Port", "Protocol", "Throughput", "Goodput", "In MB", "Out MB", "Mbps", "Latency", "Jitter", "Loss")
 	s += tableHeader.Render(headerRow) + "\n"
 
 	type sessionItem struct {
@@ -199,6 +199,7 @@ func (m model) renderMonitor() string {
 		inMB := float64(stats.InboundBytes) / 1024 / 1024
 		outMB := float64(stats.OutboundBytes) / 1024 / 1024
 		lat := stats.Latency.Round(time.Millisecond)
+		jitter := stats.AverageJitter.Round(time.Millisecond)
 
 		lossStr := fmt.Sprintf("%-4d", stats.PacketLoss)
 		if stats.PacketLoss > 0 {
@@ -208,8 +209,8 @@ func (m model) renderMonitor() string {
 		thruStr := formatBytes(uint64(stats.TotalBytes))
 		goodStr := formatBytes(uint64(stats.PayloadBytes))
 
-		row := fmt.Sprintf("%-18.18s | %-16.16s | %-6d | %-5s | %-10s | %-9s | %-6.2f | %-6.2f | %-7.2f | %-8v | %s\n",
-			stats.AppName, ip, stats.Port, stats.Protocol, thruStr, goodStr, inMB, outMB, stats.CurrentRate, lat, lossStr)
+		row := fmt.Sprintf("%-18.18s | %-16.16s | %-6d | %-8s | %-10s | %-9s | %-7.2f | %-7.2f | %-7.2f | %-8v | %-8v | %s\n",
+			stats.AppName, ip, stats.Port, stats.Protocol, thruStr, goodStr, inMB, outMB, stats.CurrentRate, lat, jitter, lossStr)
 		s += row
 		count++
 	}
